@@ -167,7 +167,8 @@ class Handler(socketserver.StreamRequestHandler):
                     OPS[op_id]["last_unit_at"] = time.time()
                     OPS[op_id]["unit"] = msg.get("unit")
                     OPS[op_id]["level"] = 0
-                    OPS[op_id]["done"] = bool(msg.get("done"))
+                    if msg.get("done"):
+                        OPS.pop(op_id, None)   # finished work must not linger as unhealthy
                 elif cmd == "status":
                     pass
                 payload = {"ops": OPS}
