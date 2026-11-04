@@ -18,6 +18,8 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python }}
+      - name: install test runner
+        run: python -m pip install --quiet pytest
       - name: unit tests (six states, no processes)
         run: python -m pytest tests/test_classify.py -q
       - name: live injection tests (real /proc)
