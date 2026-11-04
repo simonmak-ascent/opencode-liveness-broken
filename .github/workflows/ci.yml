@@ -1,0 +1,27 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    # This repository is public, so GitHub-hosted runners provision normally.
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ["3.11", "3.12", "3.13"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+      - name: unit tests (six states, no processes)
+        run: python -m pytest tests/test_classify.py -q
+      - name: live injection tests (real /proc)
+        run: python -m pytest tests/test_inject_live.py -q
+      - name: cli smoke
+        run: |
+          python -m liveness.cli --state /nonexistent || test $? -eq 2

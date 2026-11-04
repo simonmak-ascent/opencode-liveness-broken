@@ -1,0 +1,18 @@
+[Unit]
+Description=opencode-liveness supervisor (per-second liveness verdicts)
+After=local-fs.target
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/liveness-daemon --socket /run/opencode-liveness.sock --state /run/opencode-liveness.json
+Restart=on-failure
+RestartSec=2
+RuntimeDirectory=opencode-liveness
+# The watchdog cannot be watched by itself: systemd fails and restarts it when pings stop.
+WatchdogSec=10
+ExecStartPre=/bin/sh -c 'test -d /run/opencode-liveness'
+# It pings only while its sampler loop advances, not from a side thread, so a frozen daemon dies.
+NotifyAccess=main
+
+[Install]
+WantedBy=multi-user.target

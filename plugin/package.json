@@ -1,0 +1,15 @@
+{
+  "name": "opencode-liveness",
+  "version": "0.1.0",
+  "description": "Register every OpenCode tool call as a supervised operation with per-second liveness verdicts",
+  "type": "module",
+  "license": "MIT",
+  "exports": {
+    ".": "./index.ts"
+  },
+  "files": ["index.ts", "README.md"],
+  "keywords": ["opencode", "plugin", "watchdog", "liveness"],
+  "peerDependencies": {
+    "@opencode/plugin": "*"
+  }
+}

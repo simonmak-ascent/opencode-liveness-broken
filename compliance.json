@@ -1,0 +1,15 @@
+{
+  "version": 1,
+  "default_branch": "main",
+  "merge": "pr-required",
+  "verify": [
+    "python -m pytest tests/test_classify.py -q",
+    "python -m pytest tests/test_inject_live.py -q"
+  ],
+  "deploy": {
+    "kind": "none",
+    "reason": "published library: PyPI package and npm plugin. Publication is the release, and it is verified by the version the registries serve, not by a node running the code.",
+    "targets": []
+  },
+  "e2e": []
+}
