@@ -158,7 +158,10 @@ class Handler(socketserver.StreamRequestHandler):
                         "pids": [int(p) for p in msg.get("pids", [])],
                         "profile": msg.get("profile", "foreground"),
                         "registered": time.time(),
-                        "last_unit_at": None,
+                        # Registration is the baseline: without it, an operation that never reports
+                        # progress has no age, so NO-PROGRESS can never fire — the state exists to
+                        # catch exactly that case.
+                        "last_unit_at": time.time(),
                         "unit": None,
                         "state": "RUNNING",
                         "level": 0,
