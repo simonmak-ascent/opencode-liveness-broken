@@ -205,6 +205,21 @@ def main() -> int:
     sock = pathlib.Path(args.socket)
     if sock.exists():
         sock.unlink()
+    # A client registers once, when its plugin loads. A daemon restart would otherwise erase every
+    # registration and the table would read empty while the work continues — which is exactly what
+    # happened in production.
+    if STATE_PATH.exists():
+        try:
+            saved = json.loads(STATE_PATH.read_text()).get("ops", {})
+            for op_id, op in saved.items():
+                op.setdefault("registered", time.time())
+                op.setdefault("level", 0)
+                OPS[op_id] = op
+            if saved:
+                print(f"restored {len(saved)} registration(s) from {STATE_PATH}", flush=True)
+        except Exception as exc:
+            print(f"could not restore registrations: {exc}", flush=True)
+
     threading.Thread(target=_loop, args=(args.interval,), daemon=True).start()
     server = socketserver.ThreadingUnixStreamServer(str(sock), Handler)
     os.chmod(sock, 0o660)
