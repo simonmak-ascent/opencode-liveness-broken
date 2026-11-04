@@ -1,20 +1,20 @@
 /**
- * OpenCode server plugin: the agent itself is a supervised operation.
+ * OpenCode server plugin: the agent itself is a supervised operation, and the heartbeat is a timer.
  *
- * The earlier design supervised tool calls only, so a stall *between* calls — which is where the agent
- * actually spends its time — was invisible. This registers one session-scoped operation that outlives
- * every tool call, and feeds it a heartbeat:
+ * The previous version beat from `ctx.session.hook("context", …)` and produced no beats at all — the
+ * hook never fired, so the supervisor saw an empty table and called it healthy. A 10-second interval
+ * is the reliable signal: if the server's event loop freezes, ticks stop and NO-PROGRESS fires; if the
+ * agent is merely slow between tool calls, ticks continue and nothing is interrupted.
  *
- *   session op   remedy "interrupt", protected pid — the daemon may never signal the harness
- *   heartbeat    on each model request (ctx.session.hook("context")) and on each tool result
- *   verdict      no heartbeat for the agent profile budget means the agent is stalled, and the client
- *                is asked to interrupt the session instead of killing a process
+ * Registration is repeated on every tick, so a daemon restart self-heals within one beat instead of
+ * erasing supervision for the rest of the session.
  */
 import { Plugin } from "@opencode/plugin"
 import { connect } from "node:net"
 
 const SOCKET = process.env.LIVENESS_SOCKET ?? "/tmp/opencode-liveness.sock"
-const SESSION_OP = `session:${process.pid}`
+const OP_ID = `session:${process.pid}`
+const TICK_MS = 10_000
 
 function send(message: Record<string, unknown>): Promise<void> {
   return new Promise((resolve) => {
@@ -26,24 +26,25 @@ function send(message: Record<string, unknown>): Promise<void> {
   })
 }
 
-const beat = (unit: string) => send({ op: "progress", id: SESSION_OP, unit })
+const registration = () => ({
+  op: "register",
+  id: OP_ID,
+  pids: [process.pid],
+  protected: [process.pid], // the daemon may never signal the harness
+  remedy: "interrupt", // a stalled agent is interrupted, not killed
+  profile: "agent",
+})
+
+const beat = (unit: string) => send({ op: "progress", id: OP_ID, unit })
 
 export default Plugin.define({
   id: "opencode-liveness",
   async setup(ctx) {
-    await send({
-      op: "register",
-      id: SESSION_OP,
-      pids: [process.pid],
-      protected: [process.pid],
-      remedy: "interrupt",
-      profile: "agent",
-    })
-
-    // The agent's own heartbeat: one model request, one beat.
-    await ctx.session.hook("context", async () => {
-      await beat("model-request")
-    })
+    await send(registration())
+    const timer = setInterval(() => {
+      void send(registration())
+      void beat("tick")
+    }, TICK_MS)
 
     const tools = await ctx.tool.list()
     await ctx.tool.transform((editor) => {
@@ -64,7 +65,8 @@ export default Plugin.define({
     })
 
     return () => {
-      void send({ op: "progress", id: SESSION_OP, unit: "session-end", done: true })
+      clearInterval(timer)
+      void send({ op: "progress", id: OP_ID, unit: "session-end", done: true })
     }
   },
 })
