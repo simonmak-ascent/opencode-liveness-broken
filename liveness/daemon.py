@@ -33,6 +33,9 @@ from . import sampler
 PROFILES = {
     "foreground": {"warn": 30.0, "dump": 90.0, "kill": 180.0, "unit_budget": 60.0},
     "background": {"warn": 120.0, "dump": 600.0, "kill": 1800.0, "unit_budget": 180.0},
+    # An agent that is thinking is not hung, and a tool call can legitimately run for minutes.
+    # 300 s of silence from both is a stall worth interrupting, not killing.
+    "agent": {"warn": 120.0, "dump": 210.0, "kill": 300.0, "unit_budget": 300.0},
 }
 
 LOCK = threading.Lock()
@@ -92,7 +95,14 @@ def _dump_stack(op: dict) -> str | None:
 
 
 def _kill(op: dict) -> None:
+    if op.get("remedy") == "interrupt":
+        # The remedy for a stalled agent is an interrupt performed by the client, never a signal:
+        # SIGTERM here would terminate the harness that is supposed to survive.
+        op["interrupt_requested"] = True
+        return
     for pid in sorted(op.get("pids", [])):
+        if pid in op.get("protected", []):
+            continue
         for sig in (signal.SIGTERM, signal.SIGKILL):
             try:
                 os.kill(pid, sig)
@@ -157,6 +167,8 @@ class Handler(socketserver.StreamRequestHandler):
                         "id": op_id,
                         "pids": [int(p) for p in msg.get("pids", [])],
                         "profile": msg.get("profile", "foreground"),
+                        "remedy": msg.get("remedy", "kill"),
+                        "protected": [int(p) for p in msg.get("protected", [])],
                         "registered": time.time(),
                         # Registration is the baseline: without it, an operation that never reports
                         # progress has no age, so NO-PROGRESS can never fire — the state exists to

@@ -1,49 +1,62 @@
 /**
- * OpenCode server plugin: every tool call becomes a registered operation.
+ * OpenCode server plugin: the agent itself is a supervised operation.
  *
- * V2 exposes hooks on session/model/HTTP domains and a `tool.transform` editor, so the wrapper is
- * installed by transforming each registered tool's `execute` rather than by a tool-level hook.
+ * The earlier design supervised tool calls only, so a stall *between* calls — which is where the agent
+ * actually spends its time — was invisible. This registers one session-scoped operation that outlives
+ * every tool call, and feeds it a heartbeat:
  *
- * Honest limitation: the plugin cannot see the *child* pid a tool spawns — it registers the server's
- * own tree. The daemon follows parent/child edges, so a tool's subprocess is sampled, but two tools
- * running concurrently are one operation from the daemon's point of view unless they register
- * themselves.
+ *   session op   remedy "interrupt", protected pid — the daemon may never signal the harness
+ *   heartbeat    on each model request (ctx.session.hook("context")) and on each tool result
+ *   verdict      no heartbeat for the agent profile budget means the agent is stalled, and the client
+ *                is asked to interrupt the session instead of killing a process
  */
 import { Plugin } from "@opencode/plugin"
 import { connect } from "node:net"
 
-const SOCKET = process.env.LIVENESS_SOCKET ?? "/run/opencode-liveness.sock"
+const SOCKET = process.env.LIVENESS_SOCKET ?? "/tmp/opencode-liveness.sock"
+const SESSION_OP = `session:${process.pid}`
 
 function send(message: Record<string, unknown>): Promise<void> {
   return new Promise((resolve) => {
     const socket = connect(SOCKET)
     const done = () => resolve()
-    socket.on("error", done)
+    socket.on("error", done) // a missing daemon must cost nothing
     socket.on("connect", () => socket.end(JSON.stringify(message) + "\n", done))
-    setTimeout(done, 500) // never let the watchdog wrapper become the hang
+    setTimeout(done, 500)
   })
 }
+
+const beat = (unit: string) => send({ op: "progress", id: SESSION_OP, unit })
 
 export default Plugin.define({
   id: "opencode-liveness",
   async setup(ctx) {
-    const tools = await ctx.tool.list()
+    await send({
+      op: "register",
+      id: SESSION_OP,
+      pids: [process.pid],
+      protected: [process.pid],
+      remedy: "interrupt",
+      profile: "agent",
+    })
 
+    // The agent's own heartbeat: one model request, one beat.
+    await ctx.session.hook("context", async () => {
+      await beat("model-request")
+    })
+
+    const tools = await ctx.tool.list()
     await ctx.tool.transform((editor) => {
       for (const tool of tools) {
         const original = tool.execute
         if (typeof original !== "function") continue
         editor.update(tool.id, (draft) => {
           draft.execute = async (input: unknown, context: any) => {
-            const id = `${tool.id}:${context?.messageID ?? Date.now()}`
-            await send({ op: "register", id, pids: [process.pid], profile: "foreground" })
+            await beat(`tool:${tool.id}:start`)
             try {
-              const result = await original(input, context)
-              await send({ op: "progress", id, unit: tool.id, done: true })
-              return result
-            } catch (error) {
-              await send({ op: "progress", id, unit: `${tool.id}:error`, done: true })
-              throw error
+              return await original(input, context)
+            } finally {
+              await beat(`tool:${tool.id}:end`)
             }
           }
         })
@@ -51,7 +64,7 @@ export default Plugin.define({
     })
 
     return () => {
-      // registrations are disposed with the plugin runtime
+      void send({ op: "progress", id: SESSION_OP, unit: "session-end", done: true })
     }
   },
 })
